@@ -58,6 +58,10 @@ Background threads never touch widgets. They post `AgentEvent`s to a queue, and 
 
 AI output can never trigger arbitrary actions. The only desktop actions are clipboard copy, pasting a value into the field **you** focused, and pressing Tab. Every one runs after an explicit confirmation and a 3-second countdown.
 
+## Design documentation
+
+The full set of design diagrams is in [`docs/`](docs/README.md): the agent orchestrator, data flow diagrams (levels 0–2), the use case diagram, system sequence diagrams (SSD), sequence diagrams (SD), the UML class diagram, the state machine, activity diagrams, and component & deployment diagrams. GitHub renders them inline, and pre-rendered SVGs are in [`docs/images/`](docs/images/).
+
 ## Requirements
 
 - Windows 10/11 (macOS/Linux mostly work; window-focus checks are Windows-oriented)

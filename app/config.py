@@ -20,11 +20,13 @@ class AgentSettings:
     """User-tunable agent behaviour, persisted to settings.json (no secrets)."""
 
     monitor_interval_s: float = 2.0      # how often continuous mode samples the screen
-    change_threshold: float = 0.004      # fraction of normalized cells that must change
-    settle_time_s: float = 1.0           # debounce: screen must be stable this long
+    change_threshold: float = 0.02       # fraction of normalized cells that must change
+    settle_time_s: float = 1.5           # debounce: screen must be stable this long
     max_image_side: int = 2000           # downscale uploads beyond this (keeps text legible)
     request_timeout_s: float = 60.0
-    max_retries: int = 1                 # bounded retries for transient failures
+    max_retries: int = 0                 # auto-retries cost quota; the user retries manually
+    min_request_gap_s: float = 20.0      # continuous mode: minimum time between API requests
+    session_request_budget: int = 20     # hard cap on API requests per app session
 
     def clamp(self) -> "AgentSettings":
         self.monitor_interval_s = min(max(self.monitor_interval_s, 0.5), 60.0)
@@ -32,7 +34,9 @@ class AgentSettings:
         self.settle_time_s = min(max(self.settle_time_s, 0.0), 10.0)
         self.max_image_side = int(min(max(self.max_image_side, 640), 4096))
         self.request_timeout_s = min(max(self.request_timeout_s, 10.0), 300.0)
-        self.max_retries = int(min(max(self.max_retries, 0), 4))
+        self.max_retries = int(min(max(self.max_retries, 0), 2))
+        self.min_request_gap_s = min(max(self.min_request_gap_s, 0.0), 600.0)
+        self.session_request_budget = int(min(max(self.session_request_budget, 1), 1000))
         return self
 
 

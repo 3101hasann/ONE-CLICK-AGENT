@@ -24,7 +24,11 @@ CHEATER.exe is a Windows desktop AI agent. Pick a mode and click **Capture Once*
 - **Region selection** (drag a rectangle), and **Preview** to see exactly what would be sent
 - **Pydantic validation** of every AI response. Malformed output is rejected and you get a Retry option.
 - **Readable error categories**: rate limit/quota, auth, model not found, timeout, network, server, empty, malformed, screenshot, automation
-- Bounded retries with backoff for transient errors, and **no retry storms on quota errors**. Continuous mode pauses on rate limits and shows the suggested wait time.
+- **Quota protection** (free-tier keys have small daily limits):
+  - After a quota/rate-limit error, **no request is sent** until Gemini's reset time. Retry is refused locally, and the wait is shown in plain units (e.g. "~19.0 h").
+  - A **per-session request budget** (default 20). The agent pauses when it's used up.
+  - In continuous mode, **at most one request every 20 s**, and only for changes larger than 2% of the screen.
+  - **No automatic retries** by default, because every attempt counts against your quota. Use Retry manually.
 - A timestamped **activity log**. API keys and e-mail addresses are redacted, and no screenshots or form values are logged.
 - A footer showing Gemini connection status, mode, monitoring state, and the API request count
 
@@ -84,7 +88,7 @@ If PowerShell blocks activation, run `Set-ExecutionPolicy -Scope CurrentUser Rem
 | `CHEATER_MOCK_MODE` | no | off | `1` = canned responses, clearly labelled **MOCK — NOT REAL AI** |
 | `CHEATER_MOCK_SCENARIO` | no | `ok` | `rate_limit`, `timeout`, `malformed`: for demoing error handling |
 
-Agent tuning (monitor interval, change sensitivity, settle time, max image size, timeout, retries) lives under **⚙ Settings** and is saved to `settings.json`.
+Agent tuning (monitor interval, change sensitivity, settle time, max image size, timeout, retries, minimum gap between requests, session request budget) lives under **⚙ Settings** and is saved to `settings.json`.
 
 ## How to use
 
@@ -92,6 +96,8 @@ Agent tuning (monitor interval, change sensitivity, settle time, max image size,
 2. **Form:** open `demo/sample_form.html` and paste the contents of `demo/my_details_example.txt` into **Your details**. Click **Capture Once**, then review each row: edit values and tick the fields you want filled. Confident, user-sourced values are pre-ticked; uncertain ones are not, and sensitive fields like the password can never be filled. Click **Fill ticked fields** and click into the first ticked field during the countdown. The form is never submitted.
 3. **Feedback:** paste `demo/feedback_sample.txt` into the text box and click **Analyze Pasted Text**, or capture text on screen. Then **Copy** the improved version.
 4. **Error handling demo:** set `CHEATER_MOCK_MODE=1` and `CHEATER_MOCK_SCENARIO=rate_limit` (or `malformed`). Capture once to see the readable error, the paused agent, and the Retry button, while the UI stays responsive.
+
+**Saving quota:** **Start Agent** sends the current screen right away, then only real changes. Prefer **Capture Once** when you just need one answer, and select a region so unrelated activity (chat apps, videos, clocks) can't trigger requests.
 
 **Tips:** use **Select Region** to send less of your screen; it's faster and more private. Keep the CHEATER.exe window off the content you capture, because it's blacked out in screenshots. To abort typing, press **Stop** or move the mouse into a screen corner (PyAutoGUI fail-safe).
 
@@ -124,7 +130,8 @@ The tests cover change detection (identical screens, real changes, cursor moveme
 |---|---|
 | "GEMINI_API_KEY is not set" | Create `.env` from `.env.example`, then restart |
 | "model was not found" | Set `GEMINI_MODEL` to a model your key can use (e.g. `gemini-3.8-flash`) |
-| Rate limit / quota | Wait for the suggested time, then Retry. Check your quota in AI Studio |
+| Rate limit / quota | The app blocks requests until the reset time it shows. For a daily limit, either wait, switch `GEMINI_MODEL` to another model (quotas are usually per model), or use a key with billing. Check usage in AI Studio |
+| "Session limit … reached" | The per-session budget protects your quota. Raise it in ⚙ Settings or restart the app |
 | Timeouts / 503 / 504 | Gemini is overloaded or the network is slow. Retry, capture a smaller region, or raise the timeout in Settings |
 | "The capture is blank" | Move the CHEATER.exe window off the content, or select a region |
 | Nothing typed | Click into the target field during the countdown. CHEATER.exe refuses to type into itself |

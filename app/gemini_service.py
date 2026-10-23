@@ -10,7 +10,7 @@ from typing import Callable
 from pydantic import BaseModel
 
 from app.config import AppConfig
-from app.error_handler import AgentError, ErrorCategory, classify_exception
+from app.error_handler import AgentError, ErrorCategory, classify_exception, format_wait
 
 SHARED_RULES = """\
 You are the analysis engine inside CHEATER.exe, a desktop study and productivity assistant.
@@ -46,10 +46,44 @@ class GeminiService:
         self._sleep = sleep
         self._count_lock = threading.Lock()
         self.request_count = 0
+        self._blocked_until = 0.0        # monotonic time; quota errors block all requests
 
     @property
     def model(self) -> str:
         return self._config.model
+
+    @property
+    def settings(self):
+        return self._config.settings
+
+    @settings.setter
+    def settings(self, value) -> None:
+        self._config.settings = value
+
+    @property
+    def blocked_for(self) -> float:
+        """Seconds until requests are allowed again after a quota/rate-limit error."""
+        return max(self._blocked_until - time.monotonic(), 0.0)
+
+    @property
+    def budget_left(self) -> int:
+        return max(self.settings.session_request_budget - self.request_count, 0)
+
+    def ensure_can_send(self) -> None:
+        """Refuse locally — without touching the API — when a request would waste quota."""
+        if self.blocked_for > 0:
+            wait = self.blocked_for
+            raise AgentError(ErrorCategory.RATE_LIMIT,
+                             f"Quota/rate limit still active — no request sent "
+                             f"(try again in {format_wait(wait)}).",
+                             "Wait for the reset, or set GEMINI_MODEL to another model.",
+                             retry_after=wait)
+        if self.budget_left <= 0:
+            raise AgentError(ErrorCategory.BUDGET,
+                             f"Session limit of {self.settings.session_request_budget} API "
+                             "requests reached — no request sent.",
+                             "This protects your Gemini quota. Raise the limit in ⚙ Settings "
+                             "or restart the app.")
 
     def _get_client(self):
         if self._client is None:
@@ -81,22 +115,22 @@ class GeminiService:
     def analyze(self, request: AnalysisRequest,
                 should_continue: Callable[[], bool] = lambda: True) -> str:
         """Return the raw JSON text. Raises AgentError on any failure."""
-        attempts = 1 + self._config.settings.max_retries
+        attempts = 1 + self.settings.max_retries
         last_error: AgentError | None = None
         for attempt in range(attempts):
             if not should_continue():
                 raise AgentError(ErrorCategory.CANCELLED, "Request cancelled before sending.")
+            self.ensure_can_send()
             try:
                 return self._generate(request)
             except Exception as exc:
                 error = classify_exception(exc)
                 last_error = error
-                short_rate_limit = (error.category is ErrorCategory.RATE_LIMIT
-                                    and error.retry_after is not None and error.retry_after <= 10)
-                if attempt + 1 >= attempts or not (error.retryable or short_rate_limit):
+                if error.category is ErrorCategory.RATE_LIMIT:
+                    self._blocked_until = time.monotonic() + (error.retry_after or 60.0)
+                if attempt + 1 >= attempts or not error.retryable:
                     raise error from exc
-                delay = error.retry_after if short_rate_limit else 1.5 * (2 ** attempt)
-                self._sleep(delay)
+                self._sleep(1.5 * (2 ** attempt))
         raise last_error or AgentError(ErrorCategory.UNKNOWN, "Request failed.")
 
     def _thinking_config(self, types):

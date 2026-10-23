@@ -359,7 +359,8 @@ class CheaterApp(ctk.CTk):
             text=f"Monitoring: {'ON' if monitoring else 'off'} ({area})",
             text_color=T.ACCENT if monitoring else T.TEXT_MUTED)
         self.footer_labels["requests"].configure(
-            text=f"API requests this session: {self.service.request_count}")
+            text=f"API requests this session: {self.service.request_count} / "
+                 f"{self.service.settings.session_request_budget}")
 
     def _verify_gemini(self) -> None:
         try:
@@ -820,8 +821,6 @@ class CheaterApp(ctk.CTk):
 
     def _show_error_banner(self, err: AgentError) -> None:
         text = err.user_text()
-        if err.retry_after:
-            text += f"\nSuggested wait before retrying: ~{err.retry_after:.0f}s."
         self.error_text.configure(text=text)
         self.error_banner.grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 8))
 
@@ -1032,7 +1031,9 @@ class SettingsDialog(ctk.CTkToplevel):
         ("settle_time_s", "Settle time before sending (seconds)", float),
         ("max_image_side", "Max upload image side (px)", int),
         ("request_timeout_s", "Request timeout (seconds)", float),
-        ("max_retries", "Retries for transient errors", int),
+        ("max_retries", "Auto-retries for timeouts (each costs quota)", int),
+        ("min_request_gap_s", "Min seconds between requests (continuous)", float),
+        ("session_request_budget", "Max API requests per session", int),
     ]
 
     def __init__(self, master, settings: AgentSettings, on_save, model: str, mock: bool):

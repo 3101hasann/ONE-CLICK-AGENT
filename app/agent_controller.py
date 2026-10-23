@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import queue
 import threading
+import time
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
@@ -16,7 +17,7 @@ from PIL import Image
 
 from app.activity_logger import ActivityLogger
 from app.config import AgentSettings
-from app.error_handler import AgentError, ErrorCategory, classify_exception
+from app.error_handler import AgentError, ErrorCategory, classify_exception, format_wait
 from app.gemini_service import GeminiService
 from app.modes import MODES, ModeContext, ModeSpec
 from app.screen_change_detector import ChangeStatus, ScreenChangeDetector
@@ -45,7 +46,8 @@ TRANSITIONS: dict[AgentState, set[AgentState]] = {
 }
 
 # Errors that make continuous monitoring pointless until the user intervenes.
-_PAUSE_CATEGORIES = {ErrorCategory.RATE_LIMIT, ErrorCategory.AUTH, ErrorCategory.CONFIG}
+_PAUSE_CATEGORIES = {ErrorCategory.RATE_LIMIT, ErrorCategory.AUTH, ErrorCategory.CONFIG,
+                     ErrorCategory.BUDGET}
 
 
 @dataclass
@@ -87,6 +89,8 @@ class AgentController:
         self._last_payload: tuple[bytes | None, ModeContext, ModeSpec] | None = None
         self.last_capture: Image.Image | None = None
         self.last_success = "—"
+        self._last_request_at = float("-inf")
+        self._gap_logged = False
 
     # ------------------------------------------------------------------ state
     @property
@@ -127,6 +131,7 @@ class AgentController:
     def apply_settings(self, settings: AgentSettings) -> None:
         self.settings = settings
         self.detector.threshold = settings.change_threshold
+        self.service.settings = settings
         self.detector.settle_time_s = settings.settle_time_s
 
     # ------------------------------------------------------------------ commands
@@ -164,8 +169,9 @@ class AgentController:
             self._run = run
             self.detector.reset()
             run.thread.start()
-        self.logger.ok(f"Agent started — monitoring every {self.settings.monitor_interval_s:g}s "
-                       f"({self.mode.title})")
+        self.logger.ok(f"Agent started ({self.mode.title}) — the current screen is sent first, "
+                       f"then only meaningful changes, at most one request every "
+                       f"{self.settings.min_request_gap_s:g}s.")
         return True
 
     def pause(self) -> bool:
@@ -304,9 +310,17 @@ class AgentController:
         try:
             image_png, ctx, mode = payload
             self._last_payload = payload
+            try:
+                self.service.ensure_can_send()   # refuse locally: never spend quota needlessly
+            except AgentError as err:
+                if generation == self._generation:
+                    self._report_error(None, err)
+                return None, err
             with self._lock:
                 self._task_seq += 1
                 task_id = self._task_seq
+            self._last_request_at = time.monotonic()
+            self._gap_logged = False
             source = "screenshot" if image_png is not None else "pasted text"
             self._emit("task", task_id, data=mode.key, source=source)
             self.logger.info(f"Task #{task_id}: sending {source} to {self.service.label} "
@@ -378,6 +392,13 @@ class AgentController:
         if self.busy:
             self.logger.info("Previous request still finishing — will check again.")
             return
+        gap = self.settings.min_request_gap_s - (time.monotonic() - self._last_request_at)
+        if gap > 0:
+            if not self._gap_logged:
+                self.logger.info(f"Change detected — waiting {format_wait(gap)} before the next "
+                                 "request to protect your quota.")
+                self._gap_logged = True
+            return
         with self._lock:
             if run.stop.is_set() or self._state != AgentState.RUNNING:
                 return
@@ -398,7 +419,7 @@ class AgentController:
             if err is not None and err.category in _PAUSE_CATEGORIES:
                 run.resume.clear()
                 self._transition(AgentState.PAUSED)
-                wait = f" Retry in ~{err.retry_after:.0f}s." if err.retry_after else ""
+                wait = f" Retry in {format_wait(err.retry_after)}." if err.retry_after else ""
                 self.logger.warn(f"Continuous mode paused because of: {err.category.value}.{wait}")
             elif result is not None and self.mode.pause_for_review:
                 run.resume.clear()

@@ -157,3 +157,8 @@ def test_missing_api_key_is_handled_gracefully():
     with pytest.raises(AgentError) as info:
         service.verify()
     assert info.value.category == ErrorCategory.CONFIG
+
+
+def test_daily_quota_message_is_human_readable():
+    err = classify_exception(FakeApiError(429, "RESOURCE_EXHAUSTED quota exceeded. Please retry in 68377s."))
+    assert "daily" in err.message and "~19.0 h" in err.message

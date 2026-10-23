@@ -9,6 +9,7 @@ class ErrorCategory(str, Enum):
     CONFIG = "Configuration"
     AUTH = "Authentication"
     RATE_LIMIT = "Rate limit"
+    BUDGET = "Request budget"
     NETWORK = "Network"
     TIMEOUT = "Timeout"
     SERVER = "Server error"
@@ -44,6 +45,15 @@ _RETRY_DELAY = re.compile(r"retry(?:[ _]?delay)?['\"]?\s*[:=]?\s*['\"]?(\d+(?:\.
 _RETRY_IN = re.compile(r"retry in\s+(\d+(?:\.\d+)?)\s*s", re.I)
 
 
+def format_wait(seconds: float) -> str:
+    seconds = max(int(seconds), 0)
+    if seconds >= 3600:
+        return f"~{seconds / 3600:.1f} h"
+    if seconds >= 60:
+        return f"~{seconds // 60} min"
+    return f"~{seconds} s"
+
+
 def _retry_after(text: str) -> float | None:
     for pattern in (_RETRY_DELAY, _RETRY_IN):
         match = pattern.search(text)
@@ -73,12 +83,20 @@ def classify_exception(exc: BaseException) -> AgentError:
     names = " ".join(cls.__name__ for cls in type(exc).__mro__).lower()
 
     if code == 429 or "resource_exhausted" in lowered or "quota" in lowered or "rate limit" in lowered:
+        wait = _retry_after(text)
+        if wait is not None and wait > 3600:
+            return AgentError(
+                ErrorCategory.RATE_LIMIT,
+                f"The daily Gemini quota for this model is used up (resets in {format_wait(wait)}).",
+                "No more requests will be sent until then. Options: wait for the reset, set "
+                "GEMINI_MODEL to another model (quotas are usually per model), or use a key "
+                "with billing enabled.", retry_after=wait)
         return AgentError(
             ErrorCategory.RATE_LIMIT,
-            "The Gemini API quota or rate limit has been reached.",
-            "Continuous mode was paused. Wait a little and use Retry, or check your "
-            "quota at https://aistudio.google.com.",
-            retryable=False, retry_after=_retry_after(text))
+            "The Gemini API rate limit or quota has been reached.",
+            f"Requests are blocked for {format_wait(wait or 60)}, then you can Retry. "
+            "Check your quota at https://aistudio.google.com.",
+            retryable=False, retry_after=wait)
     if code in (401, 403) or "api key not valid" in lowered or "api_key_invalid" in lowered \
             or "permission_denied" in lowered or "unauthenticated" in lowered:
         return AgentError(ErrorCategory.AUTH, "Gemini rejected the API key or permissions.",

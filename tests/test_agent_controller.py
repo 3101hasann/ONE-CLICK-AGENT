@@ -52,7 +52,7 @@ class FakeService(GeminiService):
 
 
 def make(service=None, **settings):
-    opts = dict(monitor_interval_s=0.05, settle_time_s=0.0)
+    opts = dict(monitor_interval_s=0.05, settle_time_s=0.0, min_request_gap_s=0.0)
     opts.update(settings)
     events = queue.Queue()
     controller = AgentController(service or FakeService(), FakeScreens(), ActivityLogger(),
@@ -200,3 +200,39 @@ def test_mode_cannot_change_while_running():
     assert not controller.set_mode("form")
     controller.shutdown()
     assert controller.set_mode("form")
+
+
+def test_quota_error_blocks_further_api_calls():
+    service = FakeService(error=AgentError(ErrorCategory.RATE_LIMIT, "quota", retry_after=68000))
+    controller, events = make(service)
+    controller.capture_once()
+    assert wait_for(lambda: controller.state == AgentState.ERROR)
+    service.error = None                     # even if the API would now succeed…
+    assert controller.retry()
+    assert wait_for(lambda: controller.state == AgentState.ERROR)
+    assert service.request_count == 1       # …the retry is refused locally, no API call
+    errors = [e.data for e in drain(events) if e.kind == "error"]
+    assert "no request sent" in errors[-1].message
+
+
+def test_session_budget_caps_requests():
+    service = FakeService()
+    service.settings.session_request_budget = 2
+    controller, _ = make(service)
+    for _ in range(3):
+        controller.capture_once()
+        assert wait_for(lambda: controller.state in (AgentState.WAITING_FOR_REVIEW, AgentState.ERROR))
+    assert service.request_count == 2
+    assert controller.state == AgentState.ERROR
+
+
+def test_continuous_mode_respects_min_request_gap():
+    service = FakeService()
+    controller, _ = make(service, min_request_gap_s=30.0)
+    controller.start()
+    assert wait_for(lambda: service.request_count == 1)
+    for variant in (1, 2, 3):
+        controller.screenshots.variant = variant
+        time.sleep(0.2)
+    controller.shutdown()
+    assert service.request_count == 1

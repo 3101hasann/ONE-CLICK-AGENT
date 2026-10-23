@@ -24,7 +24,7 @@ class AgentSettings:
     settle_time_s: float = 1.0           # debounce: screen must be stable this long
     max_image_side: int = 2000           # downscale uploads beyond this (keeps text legible)
     request_timeout_s: float = 60.0
-    max_retries: int = 2                 # bounded retries for transient failures
+    max_retries: int = 1                 # bounded retries for transient failures
 
     def clamp(self) -> "AgentSettings":
         self.monitor_interval_s = min(max(self.monitor_interval_s, 0.5), 60.0)

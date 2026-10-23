@@ -87,6 +87,10 @@ def classify_exception(exc: BaseException) -> AgentError:
         return AgentError(ErrorCategory.CONFIG, "The configured Gemini model was not found.",
                           "Set GEMINI_MODEL in .env to a model that supports images "
                           "(e.g. gemini-3.8-flash).")
+    if code == 504 or "deadline_exceeded" in lowered:
+        return AgentError(ErrorCategory.TIMEOUT, "Gemini did not answer before the deadline (504).",
+                          "Gemini may be overloaded — retry, capture a smaller region, or set "
+                          "GEMINI_THINKING_LEVEL=minimal.", retryable=True)
     if code is not None and 500 <= code < 600:
         return AgentError(ErrorCategory.SERVER, f"Gemini returned a server error ({code}).",
                           "This is usually temporary — try again shortly.", retryable=True)

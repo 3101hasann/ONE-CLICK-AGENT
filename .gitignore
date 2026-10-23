@@ -1,0 +1,16 @@
+# secrets / local config
+.env
+settings.json
+
+# environments & caches
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# logs and temporary captures (may contain sensitive info)
+logs/
+*.log
+captures/
+tmp_*.png

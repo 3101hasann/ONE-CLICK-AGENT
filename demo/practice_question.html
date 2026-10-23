@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Practice Quiz — Physics (ungraded)</title>
+<style>
+ body{font-family:Segoe UI,Arial,sans-serif;background:#f6f7f9;margin:0;padding:48px;color:#1f2937}
+ .card{max-width:720px;margin:auto;background:#fff;border-radius:14px;padding:32px 40px;box-shadow:0 4px 24px #0001}
+ h1{font-size:15px;color:#6b7280;font-weight:600;margin:0 0 4px} h2{font-size:24px;margin:0 0 24px}
+ label{display:block;padding:12px 16px;border:1px solid #e5e7eb;border-radius:10px;margin:8px 0;font-size:18px}
+ .tag{display:inline-block;background:#ecfccb;color:#365314;border-radius:6px;padding:2px 8px;font-size:12px}
+ input[type=text]{width:100%;padding:12px;font-size:16px;border:1px solid #d1d5db;border-radius:8px;box-sizing:border-box}
+ button{margin-top:16px;padding:10px 18px;font-size:15px}
+</style></head><body>
+<div class="card" id="q1">
+ <span class="tag">Practice set · not graded</span>
+ <h1>Question 3 of 10</h1>
+ <h2>A car accelerates uniformly from rest to 24 m/s in 6 seconds. What distance does it travel during this time?</h2>
+ <label><input type="radio" name="q"> A. 48 m</label>
+ <label><input type="radio" name="q"> B. 72 m</label>
+ <label><input type="radio" name="q"> C. 144 m</label>
+ <label><input type="radio" name="q"> D. 36 m</label>
+ <p>Your working / answer:</p><input type="text" placeholder="Type your answer">
+ <button onclick="next()">Next question →</button>
+</div>
+<script>
+ const qs=[["What is the chemical symbol for sodium?",["A. S","B. Na","C. So","D. Sd"]],
+           ["Solve for x: 3x − 7 = 11",["A. x = 4/3","B. x = 6","C. x = 18","D. x = 3"]]];
+ let i=0;function next(){if(i>=qs.length)return;const c=document.getElementById('q1');
+ c.querySelector('h1').textContent=`Question ${4+i} of 10`;c.querySelector('h2').textContent=qs[i][0];
+ c.querySelectorAll('label').forEach((l,j)=>l.lastChild.textContent=' '+qs[i][1][j]);i++;}
+</script></body></html>

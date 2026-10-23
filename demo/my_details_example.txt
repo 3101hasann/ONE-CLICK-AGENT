@@ -1,0 +1,6 @@
+Name: Alex Example
+Email: alex.example@university.edu
+Organization: State University
+Team: Null Pointers
+T-shirt: M
+Why attend: To build an AI productivity tool with my team and learn from mentors.

@@ -14,3 +14,8 @@ logs/
 *.log
 captures/
 tmp_*.png
+
+# build output
+build/
+dist/
+*.spec

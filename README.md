@@ -64,6 +64,18 @@ AI output can never trigger arbitrary actions. The only desktop actions are clip
 - Python **3.11+** (tested on 3.14)
 - A Gemini API key from https://aistudio.google.com/apikey
 
+## Quick start (Windows)
+
+**Option A: double-click `run.bat`.** On first run it creates the virtual environment, installs dependencies, and opens Notepad so you can paste your `GEMINI_API_KEY` into `.env`. After that it launches the app with no console window. Later runs start instantly.
+
+**Option B: standalone `CHEATER.exe`** (no Python needed on the target PC):
+
+```powershell
+build_exe.bat          # produces dist\CHEATER.exe (~37 MB)
+```
+
+Put a `.env` file containing `GEMINI_API_KEY` **next to `CHEATER.exe`**. `build_exe.bat` copies your local `.env` there automatically. Settings and logs are also stored next to the exe.
+
 ## Setup (Windows PowerShell)
 
 ```powershell

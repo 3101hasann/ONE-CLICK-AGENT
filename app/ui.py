@@ -6,8 +6,10 @@ Background threads never touch widgets: they put AgentEvent objects on `self.eve
 from __future__ import annotations
 
 import queue
+import sys
 import threading
 import tkinter as tk
+from pathlib import Path
 from tkinter import messagebox
 
 import customtkinter as ctk
@@ -47,6 +49,12 @@ class CheaterApp(ctk.CTk):
         self.title("CHEATER.exe — The One-Click Agent")
         self.geometry("1280x820")
         self.minsize(1040, 680)
+        icon = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent)) / "app" / "icon.ico"
+        if icon.exists():
+            try:
+                self.iconbitmap(str(icon))
+            except tk.TclError:
+                pass  # cosmetic only
 
         self.config_data = config
         self.events: queue.Queue = queue.Queue()

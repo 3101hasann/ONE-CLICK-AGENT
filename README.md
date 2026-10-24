@@ -8,6 +8,14 @@ CHEATER.exe is a Windows desktop AI agent. Pick a mode and click **Capture Once*
 
 ---
 
+## About the project
+
+*CHEATER.exe is a one-click desktop AI agent that reads your screen and solves practice questions, fills forms and improves your writing — fast, validated, and always under your control.*
+
+CHEATER.exe — The One-Click Agent is a Windows desktop AI assistant that cuts repetitive screen work down to one click. You pick a mode and click Capture: it reads what's on your screen, sends it to Google Gemini, and shows a structured, validated result in a clean dark dashboard. It has three modes: a **Practice Quiz Solver** that explains and answers practice questions, a **Smart Form Filler** that fills forms using only the details you provide, and **Instant Feedback** that corrects and improves your writing. In continuous mode it watches the screen and sends a request only when the content actually changes. It runs one request at a time and protects your API quota with request limits and automatic pausing. You stay in control: every answer is a reviewed suggestion, nothing is typed without your confirmation, forms are never submitted automatically, and sensitive fields like passwords are never filled. It's built in Python with CustomTkinter, the Gemini API and Pydantic validation, has 39 automated tests, and comes with full UML and data-flow design documentation.
+
+---
+
 ## Features
 
 | Mode | What it does |

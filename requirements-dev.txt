@@ -1,0 +1,5 @@
+# Testing / development dependencies (Assignment 3).
+# Install after the runtime deps:  pip install -r requirements.txt -r requirements-dev.txt
+pytest>=8.0
+pytest-xdist>=3.5     # parallel execution: pytest -n auto
+openpyxl>=3.1         # generate/maintain docs/assignment3/test_cases.xlsx

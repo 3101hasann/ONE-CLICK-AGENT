@@ -19,3 +19,8 @@ tmp_*.png
 build/
 dist/
 *.spec
+
+# Office temporary lock files (created while a .xlsx/.docx is open)
+~$*
+# generated test report
+docs/assignment3/report.xml

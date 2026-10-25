@@ -1,5 +1,5 @@
 @echo off
-rem CHEATER.exe launcher: sets up everything on first run, then starts the app.
+rem One Click launcher: sets up everything on first run, then starts the app.
 setlocal
 cd /d "%~dp0"
 

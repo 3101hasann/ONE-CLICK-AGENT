@@ -1,8 +1,10 @@
-# ⚡ CHEATER.exe — The One-Click Agent
+# 🔥 One Click — the one-tap agent
 
-**One click. One agent. Less busywork.**
+**One tap and it's cooked. No busywork, no cap. 🔥**
 
-CHEATER.exe is a Windows desktop AI agent. Pick a mode and click **Capture Once** or **Start Agent**. It reads what's on your screen, sends it to Google Gemini for analysis, validates the structured result, and shows it in a review panel. Any action, such as copying or typing into a field, needs your confirmation first.
+![One Click demo](docs/demo.gif)
+
+One Click is a Windows desktop AI agent. It starts hidden in the background with a small, movable floating **🍳 Cook** button. Hit Cook, tell it what you're doing (quiz / form / feedback), and it hides itself for a clean screenshot, sends it to Google Gemini (flash-lite, ~3–5s), validates the structured result, and slides the answer in as a right-docked sidebar. Any action — copying, typing, or selecting options — happens only after you confirm.
 
 > Built for **practice** and **permitted** tasks only. It never submits anything for you. It flags screens that look like live graded or proctored tests and disables answer entry on them. A **Study-only** switch hides answers and gives hints instead.
 
@@ -10,9 +12,9 @@ CHEATER.exe is a Windows desktop AI agent. Pick a mode and click **Capture Once*
 
 ## About the project
 
-*CHEATER.exe is a one-click desktop AI agent that reads your screen and solves practice questions, fills forms and improves your writing — fast, validated, and always under your control.*
+*One Click is a one-tap desktop AI agent that reads your screen to solve practice questions, fill forms, and auto-fill feedback surveys — fast, validated, and always under your control.*
 
-CHEATER.exe — The One-Click Agent is a Windows desktop AI assistant that cuts repetitive screen work down to one click. You pick a mode and click Capture: it reads what's on your screen, sends it to Google Gemini, and shows a structured, validated result in a clean dark dashboard. It has three modes: a **Practice Quiz Solver** that explains and answers practice questions, a **Smart Form Filler** that fills forms using only the details you provide, and **Instant Feedback** that corrects and improves your writing. In continuous mode it watches the screen and sends a request only when the content actually changes. It runs one request at a time and protects your API quota with request limits and automatic pausing. You stay in control: every answer is a reviewed suggestion, nothing is typed without your confirmation, forms are never submitted automatically, and sensitive fields like passwords are never filled. It's built in Python with CustomTkinter, the Gemini API and Pydantic validation, has 39 automated tests, and comes with full UML and data-flow design documentation.
+One Click is a Windows desktop AI assistant that cuts repetitive screen work down to a single tap. It lives in the background behind a floating **🍳 Cook** button; press it, say what you're doing, and it grabs a clean screenshot (hiding itself first so it never blocks the content), sends it to Google Gemini **flash-lite** for ~3–5s responses, and shows a structured, validated result in a docked sidebar. It has three modes: a **Practice Quiz Solver** that explains and answers practice questions, a **Smart Form Filler** that fills forms using only the details you provide, and a **Feedback Form Filler** that reads a rating/survey form, picks the option matching a tone you choose, and can auto-fill the whole thing — selecting options and scrolling down until the form is done. In continuous mode it watches the screen and sends a request only when the content actually changes. It runs one request at a time and protects your API quota with request limits and automatic pausing. You stay in control: every answer is a reviewed suggestion, nothing is typed without your confirmation, forms are never submitted automatically, and sensitive fields like passwords are never filled. It's built in Python with CustomTkinter, the Gemini API and Pydantic validation, has 39 automated tests, and comes with full UML and data-flow design documentation.
 
 ---
 
@@ -22,7 +24,7 @@ CHEATER.exe — The One-Click Agent is a Windows desktop AI assistant that cuts 
 |---|---|
 | ✔ **Practice Quiz Solver** | Transcribes the question and its options, then gives a suggested answer, an explanation, and a confidence level. Study-only mode returns hints instead of answers. |
 | ✎ **Smart Form Filler** | Finds the visible form fields and maps **only the details you typed** onto them. You review, edit, and tick each field before anything is entered. Nothing is ever submitted. |
-| ✉ **Instant Feedback** | Works on a screenshot or on pasted text. Returns grammar, clarity, and structure feedback plus an improved version that keeps your meaning. |
+| ★ **Feedback Form Filler** | Reads a rating/feedback/survey form on screen, picks the option matching a tone you choose (very good → very bad), and drafts comments. Auto-fill clicks the first option then uses arrow keys to land on your choice, typing comments and scrolling down until the form ends. You verify before submitting — nothing is submitted for you. |
 
 **One-Click Agent engine** (shared by all modes)
 - **Capture Once** or **continuous monitoring** (Start / Pause / Resume / Stop)

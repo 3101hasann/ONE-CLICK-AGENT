@@ -15,7 +15,7 @@ from typing import Callable
 from app.error_handler import AgentError, ErrorCategory
 from app.form_mode import FillStep
 
-APP_WINDOW_MARKER = "CHEATER.exe"
+APP_WINDOW_MARKER = "One Click"   # must appear in every One Click window title (self-type guard)
 MAX_VALUE_LENGTH = 5000
 
 
@@ -32,6 +32,17 @@ ALLOWED_ACTIONS = frozenset(Action)
 class FillOutcome:
     label: str
     status: str   # "entered (verify on screen)" | "skipped" | "failed: ..." | "not reached"
+
+
+@dataclass(frozen=True)
+class ClickFillStep:
+    """One feedback target: click a start point, then either arrow to a choice or type text."""
+    label: str
+    xnorm: float       # 0-1000, relative to the captured image
+    ynorm: float
+    arrow: str = ""    # "right" | "down" | "" — direction to move within a radio group
+    steps: int = 0     # number of arrow presses (= chosen option index)
+    text: str = ""     # for comment boxes: paste this after clicking
 
 
 def copy_to_clipboard(text: str) -> None:
@@ -68,7 +79,7 @@ class AutomationService:
         title = _active_window_title()
         if title and APP_WINDOW_MARKER in title:
             raise AgentError(ErrorCategory.AUTOMATION,
-                             "CHEATER.exe itself has focus — nothing was typed.",
+                             "One Click itself has focus — nothing was typed.",
                              "Click into the target field during the countdown.")
         if expected_title is not None and title != expected_title:
             raise AgentError(ErrorCategory.AUTOMATION,
@@ -133,3 +144,69 @@ class AutomationService:
                 except Exception:
                     pass
         return outcomes
+
+    def run_click_fill(self, steps: list[ClickFillStep], region: tuple | None,
+                       progress: Callable[[str], None] = lambda _m: None) -> list[FillOutcome]:
+        """Feedback auto-fill: click each first option then arrow to the choice, or type a comment.
+
+        Coordinates are normalized 0-1000 over the captured image; `region` (x,y,w,h in screen
+        pixels) or the full screen maps them back to where to click.
+        """
+        import pyautogui
+        import pyperclip
+
+        pyautogui.FAILSAFE = True
+        self.cancel.clear()
+        outcomes: list[FillOutcome] = []
+        try:
+            saved_clipboard = pyperclip.paste()
+        except Exception:
+            saved_clipboard = None
+        try:
+            screen_w, screen_h = pyautogui.size()
+            base_l, base_t, base_w, base_h = region if region else (0, 0, screen_w, screen_h)
+            for step in steps:
+                if self.cancel.is_set():
+                    raise AgentError(ErrorCategory.CANCELLED, "Stopped by user.")
+                x = int(min(max(base_l + step.xnorm / 1000.0 * base_w, 0), screen_w - 1))
+                y = int(min(max(base_t + step.ynorm / 1000.0 * base_h, 0), screen_h - 1))
+                try:
+                    pyautogui.moveTo(x, y, duration=0.12)
+                    pyautogui.click()
+                    time.sleep(0.12)
+                    if step.text:
+                        self._paste(step.text)
+                        outcomes.append(FillOutcome(step.label, "entered: comment typed (verify on screen)"))
+                    else:
+                        for _ in range(max(step.steps, 0)):
+                            if self.cancel.is_set():
+                                raise AgentError(ErrorCategory.CANCELLED, "Stopped by user.")
+                            pyautogui.press(step.arrow or "right")
+                            time.sleep(0.08)
+                        outcomes.append(FillOutcome(
+                            step.label, f"entered: option #{step.steps + 1} selected (verify on screen)"))
+                    progress(f"Filled “{step.label}”")
+                except pyautogui.FailSafeException:
+                    self.cancel.set()   # so an outer auto-run loop also stops
+                    raise AgentError(ErrorCategory.CANCELLED, "Fail-safe triggered (mouse in corner).")
+        except AgentError as err:
+            done = {o.label for o in outcomes}
+            outcomes += [FillOutcome(s.label, f"not reached ({err.message})")
+                         for s in steps if s.label not in done]
+        finally:
+            if saved_clipboard is not None:
+                try:
+                    pyperclip.copy(saved_clipboard)
+                except Exception:
+                    pass
+        return outcomes
+
+    def scroll(self, clicks: int) -> None:
+        """Scroll the wheel (negative = down) over the screen centre to reveal more of a form."""
+        import pyautogui
+        try:
+            w, h = pyautogui.size()
+            pyautogui.moveTo(w // 2, h // 2)
+            pyautogui.scroll(clicks)
+        except Exception:
+            pass

@@ -17,7 +17,7 @@ else:
 SETTINGS_PATH = PROJECT_ROOT / "settings.json"
 LOG_DIR = PROJECT_ROOT / "logs"
 
-DEFAULT_MODEL = "gemini-3.8-flash"
+DEFAULT_MODEL = "gemini-3.5-flash-lite"   # flash-lite tier: ~3s responses, supports minimal thinking
 
 
 @dataclass
@@ -27,9 +27,9 @@ class AgentSettings:
     monitor_interval_s: float = 2.0      # how often continuous mode samples the screen
     change_threshold: float = 0.02       # fraction of normalized cells that must change
     settle_time_s: float = 1.5           # debounce: screen must be stable this long
-    max_image_side: int = 2000           # downscale uploads beyond this (keeps text legible)
-    request_timeout_s: float = 60.0
-    max_retries: int = 0                 # auto-retries cost quota; the user retries manually
+    max_image_side: int = 1280           # smaller = faster vision; 1280px keeps screen text legible
+    request_timeout_s: float = 60.0     # flash-lite answers in ~3s; this is generous headroom
+    max_retries: int = 1                 # one auto-retry for transient overload (503/504)
     min_request_gap_s: float = 20.0      # continuous mode: minimum time between API requests
     session_request_budget: int = 20     # hard cap on API requests per app session
 
@@ -66,7 +66,7 @@ class AppConfig:
                 "to explore the UI with clearly-labelled mock responses.)"
             )
         if not self.model:
-            return "GEMINI_MODEL is empty. Set it in .env (e.g. gemini-3.8-flash)."
+            return "GEMINI_MODEL is empty. Set it in .env (e.g. gemini-3.5-flash-lite)."
         return None
 
 
@@ -93,6 +93,6 @@ def load_config(env_file: Path | None = None) -> AppConfig:
         model = DEFAULT_MODEL
     mock = (os.getenv("CHEATER_MOCK_MODE") or "").strip().lower() in ("1", "true", "yes")
     scenario = (os.getenv("CHEATER_MOCK_SCENARIO") or "ok").strip().lower()
-    thinking = (os.getenv("GEMINI_THINKING_LEVEL") or "low").strip().lower()
+    thinking = (os.getenv("GEMINI_THINKING_LEVEL") or "minimal").strip().lower()
     return AppConfig(api_key=api_key, model=model, mock_mode=mock, mock_scenario=scenario,
                      thinking_level=thinking, settings=load_settings())

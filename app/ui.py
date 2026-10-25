@@ -8,6 +8,7 @@ from __future__ import annotations
 import queue
 import sys
 import threading
+import time
 import tkinter as tk
 from pathlib import Path
 from tkinter import messagebox
@@ -15,16 +16,16 @@ from tkinter import messagebox
 import customtkinter as ctk
 from PIL import Image
 
-from app import practice_mode, theme as T
+from app import feedback_mode, practice_mode, theme as T
 from app.activity_logger import ActivityLogger, LogEntry
 from app.agent_controller import AgentController, AgentEvent, AgentState
-from app.automation_service import AutomationService, copy_to_clipboard
+from app.automation_service import AutomationService, ClickFillStep, copy_to_clipboard
 from app.config import LOG_DIR, AppConfig, AgentSettings, save_settings
 from app.error_handler import AgentError, ErrorCategory
 from app.form_mode import FillStep, can_fill, default_approval, is_sensitive, plan_sequential_fill
 from app.gemini_service import create_service
 from app.modes import MODES, ModeContext
-from app.response_models import FeedbackResult, FormResult, PracticeResult
+from app.response_models import FeedbackFormResult, FormResult, PracticeResult
 from app.screenshot_service import Region, ScreenshotService
 
 STATE_TEXT = {
@@ -40,15 +41,21 @@ STATE_TEXT = {
     AgentState.STOPPED: ("Stopped", "Agent stopped. Start again whenever you are ready."),
 }
 COUNTDOWN_S = 3
+HIDE_DELAY_MS = 260          # let the window manager repaint after we hide our own windows
+SIDEBAR_MAX_W = 760          # docked right-hand panel width cap
+FEEDBACK_TONES = [("Very good", "very_good"), ("Good", "good"), ("Normal", "normal"),
+                  ("Bad", "bad"), ("Very bad", "very_bad")]
+_TONE_LABEL_TO_KEY = {label: key for label, key in FEEDBACK_TONES}
+_TONE_KEY_TO_LABEL = {key: label for label, key in FEEDBACK_TONES}
 
 
 class CheaterApp(ctk.CTk):
     def __init__(self, config: AppConfig):
         ctk.set_appearance_mode("dark")
         super().__init__(fg_color=T.BG)
-        self.title("CHEATER.exe — The One-Click Agent")
+        self.title("One Click — the one-tap agent")
         self.geometry("1280x820")
-        self.minsize(1040, 680)
+        self.minsize(520, 560)       # narrow enough to dock as a right-hand sidebar
         icon = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent)) / "app" / "icon.ico"
         if icon.exists():
             try:
@@ -75,6 +82,8 @@ class CheaterApp(ctk.CTk):
         self._form_rows: list[tuple] = []
         self._wrap_labels: list[ctk.CTkLabel] = []
         self._current_task: int | None = None
+        self._capturing_clean = False    # True while we hide ourselves for a clean screenshot
+        self._sidebar_visible = False
 
         self.grid_columnconfigure(1, weight=1)
         self.grid_rowconfigure(1, weight=1)
@@ -83,8 +92,11 @@ class CheaterApp(ctk.CTk):
         self._build_right()
         self._build_footer()
 
+        self.floating = FloatingBar(self, on_capture=self._open_cook_chooser,
+                                    on_panel=self._show_panel, on_quit=self._on_close)
         self.bind("<Configure>", self._on_configure, add="+")
-        self.protocol("WM_DELETE_WINDOW", self._on_close)
+        # The X button hides the panel back to the floating button; Quit is on the floating bar.
+        self.protocol("WM_DELETE_WINDOW", self._on_sidebar_close)
         self._select_mode("practice", initial=True)
         self._render_empty()
         self._apply_state(AgentState.IDLE)
@@ -97,8 +109,13 @@ class CheaterApp(ctk.CTk):
         if config.problem:
             self.logger.error(config.problem)
             self._show_error_banner(AgentError(ErrorCategory.CONFIG, config.problem))
+            self.after(200, self._show_fullscreen)   # surface the setup error in the full app
         else:
             threading.Thread(target=self._verify_gemini, daemon=True).start()
+            self.after(0, self._hide_sidebar)        # start in the background: floating button only
+        self.logger.info("Running in the background — hit the floating 🍳 Cook button and tell it "
+                         "what you're doing. The panel slides in on the right with the answer. "
+                         "lock in 🔥")
 
     # ================================================================== layout
     def _card(self, master, **kw) -> ctk.CTkFrame:
@@ -115,12 +132,12 @@ class CheaterApp(ctk.CTk):
         header.grid(row=0, column=0, columnspan=2, sticky="ew", padx=T.PAD, pady=(T.PAD, 4))
         header.grid_columnconfigure(1, weight=1)
 
-        badge = ctk.CTkLabel(header, text="⚡", width=46, height=46, corner_radius=T.RADIUS,
+        badge = ctk.CTkLabel(header, text="🔥", width=46, height=46, corner_radius=T.RADIUS,
                              fg_color=T.ACCENT, text_color=T.ACCENT_TEXT, font=T.font(22, "bold"))
         badge.grid(row=0, column=0, rowspan=2, padx=(0, 12))
-        ctk.CTkLabel(header, text="CHEATER.exe", font=T.font(22, "bold"), text_color=T.TEXT,
+        ctk.CTkLabel(header, text="One Click", font=T.font(22, "bold"), text_color=T.TEXT,
                      anchor="w").grid(row=0, column=1, sticky="sw")
-        ctk.CTkLabel(header, text="THE ONE-CLICK AGENT  ·  one click, one agent, less busywork",
+        ctk.CTkLabel(header, text="one tap and it's cooked  ·  no busywork, no cap 🔥",
                      font=T.font(11), text_color=T.TEXT_MUTED, anchor="w"
                      ).grid(row=1, column=1, sticky="nw")
 
@@ -176,7 +193,7 @@ class CheaterApp(ctk.CTk):
         self.stop_btn = ctk.CTkButton(controls, text="■  Stop", command=self._stop,
                                       **T.danger_button())
         self.stop_btn.grid(row=1, column=1, sticky="ew", padx=(3, 0), pady=3)
-        self.once_btn = ctk.CTkButton(controls, text="◎  Capture Once", command=self._capture_once,
+        self.once_btn = ctk.CTkButton(controls, text="🍳  Cook Once", command=self._capture_once,
                                       **T.secondary_button(text_color=T.ACCENT))
         self.once_btn.grid(row=2, column=0, sticky="ew", padx=(0, 3), pady=3)
         self.preview_btn = ctk.CTkButton(controls, text="🖼  Preview", command=self._preview,
@@ -230,6 +247,13 @@ class CheaterApp(ctk.CTk):
             fg_color=T.BORDER, text_color=T.TEXT_MUTED, font=T.font(12))
         self.analyze_text_btn = ctk.CTkButton(input_card, text="✉  Analyze Pasted Text",
                                               command=self._analyze_text, **T.secondary_button())
+        # Feedback Form Filler: desired tone picker (shown only in feedback mode).
+        self.feedback_tone_var = tk.StringVar(value="Good")
+        self.tone_menu = ctk.CTkOptionMenu(
+            input_card, values=[label for label, _k in FEEDBACK_TONES],
+            variable=self.feedback_tone_var, command=lambda _v: self._sync_context(),
+            fg_color=T.SURFACE, button_color=T.BORDER, button_hover_color=T.SURFACE_HOVER,
+            text_color=T.TEXT, font=T.font(12))
 
         # capture region
         region_card = self._card(left)
@@ -323,13 +347,12 @@ class CheaterApp(ctk.CTk):
 
     # ================================================================== helpers
     def _on_configure(self, event) -> None:
-        if event.widget is not self:
+        # We get a clean screenshot by hiding our windows, not by masking. The only time the
+        # mask still helps is continuous monitoring, where the docked panel stays on screen —
+        # then we keep own_window in sync with the panel so it is masked out of those captures.
+        if event.widget is not self or self._capturing_clean:
             return
-        if self.state() == "iconic":
-            self.screens.set_own_window(None)
-        else:
-            self.screens.set_own_window((self.winfo_rootx(), self.winfo_rooty(),
-                                         self.winfo_width(), self.winfo_height()))
+        self._sync_own_window()
 
     def _wrap_width(self) -> int:
         scaling = ctk.ScalingTracker.get_widget_scaling(self)
@@ -397,15 +420,28 @@ class CheaterApp(ctk.CTk):
             self._append_log(event.data)
         elif kind == "state":
             self._apply_state(event.data)
+            self.floating.set_busy(event.data == AgentState.PROCESSING)
         elif kind == "task":
             self._current_task = event.task_id
             self._hide_error_banner()
             self._refresh_task_label()
+        elif kind == "capture":
+            # The screenshot has just been taken — safe to bring the floating button back.
+            if self._capturing_clean:
+                self.floating.show()
+                self.floating.set_busy(True)
         elif kind == "result":
             self._render_result(event.data, event.extra)
             self._refresh_task_label()
+            self._capturing_clean = False
+            self.floating.set_busy(False)
+            self._show_as_sidebar()          # reveal the answer in the docked panel
         elif kind == "error":
             self._show_error_banner(event.data)
+            self._capturing_clean = False
+            self.floating.set_busy(False)
+            self.floating.show()
+            self._show_as_sidebar()          # so the error is visible and retryable
         elif kind == "counter":
             self._update_footer()
         elif kind == "preview":
@@ -414,6 +450,8 @@ class CheaterApp(ctk.CTk):
             self._on_fill_done(event.data)
         elif kind == "fill_progress":
             self.op_detail.configure(text=event.data)
+        elif kind == "autofill_done":
+            self._on_autofill_done(event.data)
         elif kind == "verify":
             ok, info = event.data
             if ok:
@@ -509,6 +547,12 @@ class CheaterApp(ctk.CTk):
         self.input_box.insert("1.0", self._mode_inputs[key])
         self.study_switch.grid_forget()
         self.analyze_text_btn.grid_forget()
+        self.tone_menu.grid_forget()
+        if key == "feedback":
+            self.input_box.grid_remove()          # no free-text input — use the tone picker
+            self.tone_menu.grid(row=2, column=0, sticky="ew", padx=12, pady=(6, 12))
+        else:
+            self.input_box.grid()                 # restore the details/context box
         if key == "practice":
             self.study_switch.grid(row=3, column=0, sticky="w", padx=12, pady=(0, 12))
         elif spec.supports_text_input:
@@ -521,9 +565,10 @@ class CheaterApp(ctk.CTk):
         text = self.input_box.get("1.0", "end-1c")
         self._mode_inputs[self.controller.mode.key] = text
         study = self.study_var.get() and self.controller.mode.key == "practice"
-        # In feedback mode the box holds text to analyze, not context for screenshots.
+        # In text-input modes the box holds text to analyze, not context for screenshots.
         ctx_text = "" if self.controller.mode.supports_text_input else text
-        self.controller.set_context(ModeContext(ctx_text, study))
+        tone = _TONE_LABEL_TO_KEY.get(self.feedback_tone_var.get(), "good")
+        self.controller.set_context(ModeContext(ctx_text, study, tone))
 
     def _on_study_toggle(self) -> None:
         self._sync_context()
@@ -535,10 +580,11 @@ class CheaterApp(ctk.CTk):
     # ================================================================== commands
     def _start(self) -> None:
         self._sync_context()
-        if self.controller.mode.key == "feedback" and self.input_box.get("1.0", "end-1c").strip():
-            self.logger.info("Continuous mode reads the screen; use Analyze Pasted Text for "
-                             "the pasted text.")
         if self.controller.start():
+            # While monitoring, the panel is the control surface (Pause/Stop live here) and is
+            # masked out of captures; the floating button steps aside to stay out of shots.
+            self.floating.hide()
+            self._show_as_sidebar()
             self._update_footer()
         self._refresh_controls()
 
@@ -554,6 +600,7 @@ class CheaterApp(ctk.CTk):
             self.automation.cancel.set()
             self.logger.warn("Stop requested — automation will halt before the next keystroke.")
         self.controller.stop()
+        self.floating.show()         # back to the floating-button workflow
         self._refresh_controls()
         self._update_footer()
 
@@ -616,10 +663,8 @@ class CheaterApp(ctk.CTk):
             text = practice_mode.full_text(result)
         elif isinstance(result, FormResult):
             text = self._current_form_values()
-        elif isinstance(result, FeedbackResult):
-            text = (f"Overall: {result.overall_feedback}\n\nImproved version:\n"
-                    f"{result.corrected_version}\n\nNotes:\n" +
-                    "\n".join(f"- {n}" for n in result.revision_notes))
+        elif isinstance(result, FeedbackFormResult):
+            text = feedback_mode.copy_text(result)
         else:
             return
         self._copy(text, "full result")
@@ -665,12 +710,13 @@ class CheaterApp(ctk.CTk):
         self.source_badge.configure(text="")
         spec = self.controller.mode
         steps = {
-            "practice": "Open a practice question, then click ◎ Capture Once.\n"
-                        "You'll get the detected question, a suggested answer and an explanation.",
-            "form": "Type your details on the left, open the form, then ◎ Capture Once.\n"
-                    "Review every suggested value before anything is typed. Nothing is submitted.",
-            "feedback": "Paste text on the left and click Analyze Pasted Text — or capture text "
-                        "on screen.\nYou'll get specific feedback and an improved version.",
+            "practice": "Open a practice question, hit 🍳 Cook, pick “Quiz”.\n"
+                        "You get the question, a suggested answer and an explanation. ez 🔥",
+            "form": "Type your details on the left, open the form, then 🍳 Cook → “Form”.\n"
+                    "Review every value before anything is typed. Nothing gets submitted, promise.",
+            "feedback": "Open the feedback/survey form, hit 🍳 Cook → “Feedback”, pick a tone.\n"
+                        "It fills every question to match the vibe and scrolls till it's done. "
+                        "Nothing is submitted — you still verify, bestie.",
         }[spec.key]
         frame = ctk.CTkFrame(self.results_body, fg_color="transparent")
         frame.grid(row=0, column=0, sticky="ew", pady=60)
@@ -696,7 +742,7 @@ class CheaterApp(ctk.CTk):
             self._render_practice(result, meta.get("study_only", False))
         elif isinstance(result, FormResult):
             self._render_form(result)
-        elif isinstance(result, FeedbackResult):
+        elif isinstance(result, FeedbackFormResult):
             self._render_feedback(result)
         self.results_body._parent_canvas.yview_moveto(0)
         self._refresh_controls()
@@ -704,7 +750,7 @@ class CheaterApp(ctk.CTk):
     def _render_practice(self, r: PracticeResult, study_only: bool) -> None:
         if r.graded_assessment_suspected:
             self._section("⚠ Possible graded assessment",
-                          "This screen looks like a live graded or proctored test. CHEATER.exe "
+                          "This screen looks like a live graded or proctored test. One Click "
                           "is for practice — follow your assessment's rules. Answer entry is "
                           "disabled.", color=T.WARNING, border=T.WARNING)
         if r.task_type == "no_question_found":
@@ -807,25 +853,70 @@ class CheaterApp(ctk.CTk):
                                    "submitted.", font=T.font(11), text_color=T.TEXT_DIM
                      ).pack(side="left")
 
-    def _render_feedback(self, r: FeedbackResult) -> None:
-        if not r.text_found:
-            self._section("No readable text", r.overall_feedback + "\nPaste the text instead, or "
-                          "select a clearer region.", color=T.WARNING, border=T.WARNING)
+    def _render_feedback(self, r: FeedbackFormResult) -> None:
+        tone_label = _TONE_KEY_TO_LABEL.get(r.tone, "Good")
+        if not r.form_found or not r.questions:
+            self._section("No feedback form found",
+                          r.notes or "Point One Click at a feedback or survey form, pick a tone "
+                          "on the left, and capture again.", color=T.WARNING, border=T.WARNING)
             return
-        self._section("Overall assessment", r.overall_feedback)
-        if r.strengths:
-            self._section("Strengths", "\n".join(f"✓ {s}" for s in r.strengths), color=T.ACCENT)
-        if r.improvements:
-            text = "\n\n".join(f"[{i.category.replace('_', ' ').upper()}]  {i.issue}\n→ "
-                               f"{i.suggestion}" for i in r.improvements)
-            self._section(f"Improvements ({len(r.improvements)})", text)
-        self._section("Original text", r.original_text, color=T.TEXT_MUTED)
-        self._section("Improved version", r.corrected_version, accent=True,
-                      copy=r.corrected_version)
-        if r.revision_notes:
-            self._section("Revision notes", "\n".join(f"• {n}" for n in r.revision_notes))
-        if r.uncertainty_notes:
-            self._section("Uncertainty", r.uncertainty_notes, color=T.WARNING)
+        self._section(r.form_title or "Feedback form",
+                      f"Answers chosen to sound “{tone_label}”. Review each one — ● marks the "
+                      "option to click; drafted comments can be typed into the focused box. "
+                      "Nothing is submitted.", color=T.TEXT_MUTED)
+        if any(q.has_click and (q.chosen_index >= 0 or q.comment.strip()) for q in r.questions):
+            bar = self._section("Auto-fill", "Clicks each question's first option, then arrows to "
+                                "your answer and types comments. Keep the form visible and "
+                                "unscrolled; verify before submitting.", color=T.INFO)
+            ctk.CTkButton(bar, text="⚡ Auto-fill the form", width=190,
+                          command=self._feedback_autofill, **T.primary_button(height=32)
+                          ).grid(row=0, column=1, sticky="e", padx=10, pady=(6, 0))
+        for i, q in enumerate(r.questions, 1):
+            self._render_feedback_question(i, q)
+
+    def _render_feedback_question(self, index: int, q) -> None:
+        row = len(self.results_body.winfo_children())
+        frame = ctk.CTkFrame(self.results_body, fg_color=T.SURFACE, corner_radius=T.RADIUS_SM,
+                             border_width=1, border_color=T.BORDER)
+        frame.grid(row=row, column=0, sticky="ew", padx=4, pady=5)
+        frame.grid_columnconfigure(0, weight=1)
+        title = f"Q{index}. {q.question}" + ("  *" if q.required else "")
+        self._wrap_label(frame, title, size=13, weight="bold", color=T.TEXT,
+                         row=0, column=0, columnspan=2, sticky="ew", padx=12, pady=(10, 4))
+        if q.options:
+            for j, opt in enumerate(q.options):
+                chosen = j == q.chosen_index
+                self._wrap_label(frame, ("●  " if chosen else "○  ") + opt, size=13,
+                                 color=T.ACCENT if chosen else T.TEXT_MUTED,
+                                 weight="bold" if chosen else "normal",
+                                 row=1 + j, column=0, columnspan=2, sticky="w", padx=16, pady=1)
+            bar = ctk.CTkFrame(frame, fg_color="transparent")
+            bar.grid(row=1 + len(q.options), column=0, columnspan=2, sticky="ew", padx=12,
+                     pady=(6, 10))
+            if 0 <= q.chosen_index < len(q.options):
+                ctk.CTkLabel(bar, text="Click the ● option on the form", font=T.font(11),
+                             text_color=T.TEXT_DIM).pack(side="left")
+                ctk.CTkButton(bar, text="⧉ Copy", width=64,
+                              command=lambda v=q.chosen_option: self._copy(v, "chosen option"),
+                              **T.secondary_button(height=26, font=T.font(11))).pack(side="right")
+            else:
+                ctk.CTkLabel(bar, text="No clear match — choose manually.", font=T.font(11),
+                             text_color=T.WARNING).pack(side="left")
+        else:
+            box = ctk.CTkTextbox(frame, height=58, fg_color=T.CARD, border_color=T.BORDER,
+                                 border_width=1, text_color=T.TEXT, font=T.font(12), wrap="word")
+            box.insert("1.0", q.comment)
+            box.grid(row=1, column=0, columnspan=2, sticky="ew", padx=12, pady=(2, 6))
+            bar = ctk.CTkFrame(frame, fg_color="transparent")
+            bar.grid(row=2, column=0, columnspan=2, sticky="ew", padx=12, pady=(0, 10))
+            ctk.CTkButton(bar, text="⧉ Copy", width=64,
+                          command=lambda b=box: self._copy(b.get("1.0", "end-1c"), "comment"),
+                          **T.secondary_button(height=26, font=T.font(11))).pack(side="left")
+            ctk.CTkButton(bar, text="⌨ Type into focused box", width=180,
+                          command=lambda b=box, lbl=q.question: self._confirm_and_fill(
+                              [FillStep(lbl[:40], b.get("1.0", "end-1c").strip(), True)],
+                              "Type this comment into the box you focus?"),
+                          **T.secondary_button(height=26, font=T.font(11))).pack(side="right")
 
     def _show_error_banner(self, err: AgentError) -> None:
         text = err.user_text()
@@ -863,7 +954,7 @@ class CheaterApp(ctk.CTk):
             self.logger.warn("Pause the agent before filling fields.")
             return
         ok = messagebox.askokcancel(
-            "Confirm entry — CHEATER.exe",
+            "Confirm entry — One Click",
             f"{question}\n\nAfter OK you have {COUNTDOWN_S} seconds to CLICK INTO the first target "
             "field. Values are pasted via the clipboard and Tab moves to the next field.\n\n"
             "Nothing will be submitted. Press Stop, or move the mouse into a screen corner, to "
@@ -896,8 +987,61 @@ class CheaterApp(ctk.CTk):
 
         threading.Thread(target=work, name="fill", daemon=True).start()
 
+    def _feedback_autofill(self) -> None:
+        r = self._result
+        if not isinstance(r, FeedbackFormResult):
+            return
+        if self._filling or (self.controller.monitoring
+                             and self.controller.state == AgentState.RUNNING):
+            self.logger.warn("Pause the agent before auto-filling.")
+            return
+        steps: list[ClickFillStep] = []
+        for q in r.questions:
+            if not q.has_click:
+                continue
+            if q.options and q.chosen_index >= 0:
+                arrow = "down" if q.orientation == "vertical" else "right"
+                steps.append(ClickFillStep(q.question[:40], q.click_x, q.click_y, arrow,
+                                           q.chosen_index))
+            elif not q.options and q.comment.strip():
+                steps.append(ClickFillStep(q.question[:40], q.click_x, q.click_y, "", 0,
+                                           q.comment.strip()))
+        if not steps:
+            self.logger.warn("No targets with coordinates to auto-fill — use the ● options.")
+            return
+        plan = "\n".join(f"  • {s.label}" + (" → type comment" if s.text
+                         else f" → arrow ×{s.steps}") for s in steps)
+        ok = messagebox.askokcancel(
+            "Auto-fill feedback — One Click",
+            "One Click will HIDE itself, then move the mouse and click each question's first "
+            "option, press arrow keys to reach the chosen answer, and type any comments:\n\n"
+            f"{plan}\n\nMake sure the whole form is visible and not scrolled. Nothing is "
+            "submitted — VERIFY every answer afterward. Slam the mouse into a screen corner to "
+            "abort.", parent=self)
+        if not ok:
+            self.logger.info("Auto-fill cancelled.")
+            return
+        self._filling = True
+        self._refresh_controls()
+        region = self.screens.region.as_tuple() if self.screens.region else None
+        self.floating.hide()
+        self._hide_sidebar()
+        self.update_idletasks()
+        self.logger.info("Auto-filling the feedback form — move mouse to a corner to abort.")
+        self.after(HIDE_DELAY_MS, lambda: self._run_click_fill(steps, region))
+
+    def _run_click_fill(self, steps, region) -> None:
+        def work():
+            outcomes = self.automation.run_click_fill(
+                steps, region,
+                progress=lambda m: self.events.put(AgentEvent("fill_progress", data=m)))
+            self.events.put(AgentEvent("fill_done", data=outcomes))
+        threading.Thread(target=work, name="click-fill", daemon=True).start()
+
     def _on_fill_done(self, outcomes) -> None:
         self._filling = False
+        if not self._sidebar_visible:           # auto-fill hid us; bring the panel + report back
+            self._show_as_sidebar()
         entered = sum(1 for o in outcomes if o.status.startswith("entered"))
         problems = [o for o in outcomes if not o.status.startswith(("entered", "skipped"))]
         level = self.logger.warn if problems else self.logger.ok
@@ -913,11 +1057,12 @@ class CheaterApp(ctk.CTk):
         if self.controller.monitoring and self.controller.state == AgentState.RUNNING:
             self.logger.warn("Pause the agent before changing the capture region.")
             return
+        self.floating.hide()
         self.withdraw()
         self.after(250, lambda: RegionSelector(self, self._on_region))
 
     def _on_region(self, region: Region | None) -> None:
-        self.deiconify()
+        self._show_as_sidebar()
         if region is None:
             self.logger.info("Region selection cancelled.")
             return
@@ -951,7 +1096,7 @@ class CheaterApp(ctk.CTk):
 
     def _open_preview(self, image: Image.Image) -> None:
         window = ctk.CTkToplevel(self, fg_color=T.BG)
-        window.title("Screenshot preview — CHEATER.exe")
+        window.title("Screenshot preview — One Click")
         window.transient(self)
         preview = image.copy()
         preview.thumbnail((960, 600))
@@ -959,7 +1104,7 @@ class CheaterApp(ctk.CTk):
         ctk.CTkLabel(window, text="", image=photo).pack(padx=16, pady=(16, 8))
         window._photo = photo  # keep a reference
         ctk.CTkLabel(window, text=f"{image.width}×{image.height}px · this is what gets sent "
-                                  "(CHEATER.exe window blacked out) · held in memory only",
+                                  "(assistant hidden during capture) · held in memory only",
                      font=T.font(11), text_color=T.TEXT_MUTED).pack(pady=(0, 14))
         window.after(150, window.focus_force)
 
@@ -976,12 +1121,387 @@ class CheaterApp(ctk.CTk):
         except OSError:
             self.logger.warn("Settings applied for this session but could not be saved.")
 
+    # ============================================================ floating / sidebar
+    def _sync_own_window(self) -> None:
+        """Mask the docked panel out of captures (only matters during continuous monitoring)."""
+        if self._sidebar_visible and self.state() not in ("withdrawn", "iconic"):
+            self.screens.set_own_window((self.winfo_rootx(), self.winfo_rooty(),
+                                         self.winfo_width(), self.winfo_height()))
+        else:
+            self.screens.set_own_window(None)
+
+    def _show_as_sidebar(self) -> None:
+        """Reveal the main window docked to the right edge, like a sidebar panel."""
+        # CTk scales width/height (logical units) but takes x/y as raw screen pixels, while
+        # winfo_screen* is in raw pixels — so convert carefully or the panel lands off-screen.
+        scaling = ctk.ScalingTracker.get_window_scaling(self) or 1.0
+        real_sw, real_sh = self.winfo_screenwidth(), self.winfo_screenheight()
+        logical_w = min(SIDEBAR_MAX_W, max(540, int((real_sw / scaling) * 0.42)))
+        logical_h = max(int((real_sh - 60) / scaling), 480)     # leave room for the taskbar
+        x = max(real_sw - round(logical_w * scaling), 0)        # raw px, so it hugs the edge
+        geom = f"{logical_w}x{logical_h}+{x}+0"
+        try:
+            self.state("normal")              # leave any maximized state before positioning
+        except tk.TclError:
+            pass
+        self.deiconify()
+        self.update_idletasks()               # must be mapped before the position takes effect
+        self.geometry(geom)
+        self.after(40, lambda: self.geometry(geom))   # re-assert in case the WM clamped it
+        self.lift()
+        try:
+            self.attributes("-topmost", True)
+        except tk.TclError:
+            pass
+        self._sidebar_visible = True
+        self.after(60, self._sync_own_window)
+        if not self.controller.monitoring:
+            self.after(80, self.floating.show)        # keep the capture button reachable
+        self._refresh_controls()
+        self._update_footer()
+
+    def _hide_sidebar(self) -> None:
+        self._sidebar_visible = False
+        self.screens.set_own_window(None)
+        try:
+            self.attributes("-topmost", False)
+        except tk.TclError:
+            pass
+        self.withdraw()
+
+    def _on_sidebar_close(self) -> None:
+        """X on the panel: hide it and fall back to the floating button (does not quit)."""
+        self._hide_sidebar()
+        self.floating.show()
+        self.logger.info("Panel hidden — hit the floating 🍳 Cook button when you're ready.")
+
+    def _show_fullscreen(self) -> None:
+        """Open the full app maximized — the workspace for picking modes and entering details."""
+        self._sidebar_visible = False
+        try:
+            self.attributes("-topmost", False)
+        except tk.TclError:
+            pass
+        self.deiconify()
+        self.update_idletasks()
+        try:
+            self.state("zoomed")              # Windows "maximize"
+        except tk.TclError:
+            sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
+            self.geometry(f"{sw}x{sh}+0+0")
+        self.lift()
+        self.after(60, self._sync_own_window)
+        if not self.controller.monitoring:
+            self.after(80, self.floating.show)
+        self._refresh_controls()
+        self._update_footer()
+
+    def _show_panel(self) -> None:
+        self._show_fullscreen()
+
+    def _open_cook_chooser(self) -> None:
+        """Ask what the user is doing, then route to the right mode (floating Cook button)."""
+        if not self._gemini_ok:
+            self.logger.warn("Gemini isn't set up — opening the panel so you can see why.")
+            self._show_as_sidebar()
+            return
+        if self._filling or self.controller.busy or self.controller.state == AgentState.PROCESSING:
+            self.logger.warn("Hold up — something's already cooking.")
+            return
+        if self.controller.monitoring and self.controller.state != AgentState.PAUSED:
+            self.logger.warn("Stop the running agent before a one-off Cook.")
+            return
+        CookChooser(self, self.feedback_tone_var.get(), self._cook)
+
+    def _cook(self, mode_key: str, tone_label: str) -> None:
+        """Dispatch the chosen task from the Cook chooser."""
+        self._select_mode(mode_key)
+        if mode_key == "feedback":
+            self.feedback_tone_var.set(tone_label)
+            self._sync_context()
+            self._start_feedback_autorun()
+        else:
+            self._sync_context()
+            self._floating_capture()
+
+    # ---------------------------------------------------------- feedback auto-run
+    def _start_feedback_autorun(self) -> None:
+        tone_label = self.feedback_tone_var.get()
+        ok = messagebox.askokcancel(
+            "Auto-fill feedback — One Click",
+            f"One Click will fill this feedback form to sound “{tone_label}”, selecting options "
+            "and scrolling down automatically until the form ends.\n\nKeep the form visible and "
+            "focused. Nothing is submitted — you still verify before sending. Slam the mouse into "
+            "a screen corner to abort.\n\nlet it cook? 🍳", parent=self)
+        if not ok:
+            self.logger.info("Feedback auto-fill cancelled.")
+            return
+        tone = _TONE_LABEL_TO_KEY.get(tone_label, "good")
+        self._filling = True
+        self._refresh_controls()
+        region = self.screens.region.as_tuple() if self.screens.region else None
+        self.automation.cancel.clear()
+        self.floating.hide()
+        self._hide_sidebar()
+        self.screens.set_own_window(None)
+        self.update_idletasks()
+        self.logger.info(f"Cooking feedback as “{tone_label}” — move the mouse to a corner to bail.")
+        self.after(HIDE_DELAY_MS, lambda: self._run_feedback_autorun(tone, region))
+
+    def _run_feedback_autorun(self, tone: str, region) -> None:
+        def work():
+            try:
+                summary = self._feedback_autorun_loop(tone, region)
+            except AgentError as err:
+                summary = {"error": err.message}
+            except Exception as exc:  # never leave the UI stuck
+                summary = {"error": f"{type(exc).__name__}: {exc}"}
+            self.events.put(AgentEvent("autofill_done", data=summary))
+        threading.Thread(target=work, name="feedback-autorun", daemon=True).start()
+
+    def _feedback_autorun_loop(self, tone: str, region) -> dict:
+        """Capture → fill new questions → scroll → repeat until the form stops changing."""
+        from PIL import ImageChops, ImageStat
+        from app.modes import MODES, ModeContext
+        from app.screenshot_service import prepare_for_upload
+
+        def mini(img):
+            return img.convert("L").resize((80, 80))
+
+        mode = MODES["feedback"]
+        max_side = self.controller.settings.max_image_side
+        filled: set[str] = set()
+        outcomes: list = []
+        pages = 0
+        empty_streak = 0
+        MAX_PAGES = 12
+        while pages < MAX_PAGES and not self.automation.cancel.is_set():
+            self.service.ensure_can_send()
+            capture = self.screens.capture()
+            jpg = prepare_for_upload(capture.image, max_side)
+            result = mode.parse(self.service.analyze(
+                mode.build_request(ModeContext(tone=tone), jpg)))
+            self.events.put(AgentEvent("counter"))   # keep the budget display current
+            steps = []
+            for q in result.questions:
+                key = q.question.strip().lower()[:60]
+                if not key or key in filled or not q.has_click:
+                    continue
+                if q.options and q.chosen_index >= 0:
+                    arrow = "down" if q.orientation == "vertical" else "right"
+                    steps.append(ClickFillStep(q.question[:40], q.click_x, q.click_y, arrow,
+                                               q.chosen_index))
+                    filled.add(key)
+                elif not q.options and q.comment.strip():
+                    steps.append(ClickFillStep(q.question[:40], q.click_x, q.click_y, "", 0,
+                                               q.comment.strip()))
+                    filled.add(key)
+            if steps:
+                outcomes += self.automation.run_click_fill(
+                    steps, region,
+                    progress=lambda m: self.events.put(AgentEvent("fill_progress", data=m)))
+                self.logger.info(f"Filled {len(steps)} question(s) on screen #{pages + 1}.")
+                empty_streak = 0
+            else:
+                empty_streak += 1
+            if self.automation.cancel.is_set():
+                break
+            # Scroll down and check whether anything new came into view.
+            before = mini(capture.image)
+            self.automation.scroll(-700)
+            time.sleep(0.6)
+            after = mini(self.screens.capture().image)
+            moved = ImageStat.Stat(ImageChops.difference(before, after)).mean[0] > 2.5
+            pages += 1
+            if not moved or empty_streak >= 2:   # bottom reached, or nothing new twice
+                break
+        return {"filled": len(filled), "pages": pages, "outcomes": outcomes,
+                "aborted": self.automation.cancel.is_set()}
+
+    def _on_autofill_done(self, summary: dict) -> None:
+        self._filling = False
+        self.automation.cancel.clear()
+        self.floating.show()
+        self._show_as_sidebar()
+        self._clear_body()
+        if summary.get("error"):
+            self.logger.error(f"Feedback auto-fill stopped — {summary['error']}")
+            self._section("Auto-fill stopped", summary["error"] + "\nFix it and Cook again.",
+                          color=T.ERROR, border=T.ERROR)
+        else:
+            n, pages = summary.get("filled", 0), summary.get("pages", 0)
+            tail = " (aborted)" if summary.get("aborted") else ""
+            self.logger.ok(f"Feedback cooked: {n} question(s) over {pages} screen(s){tail}. "
+                           "Verify before you submit — bet. 🔥")
+            report = "\n".join(f"✓ {o.label}: {o.status}" for o in summary.get("outcomes", [])) \
+                or "No fillable questions were found."
+            self._section(f"Feedback auto-fill{tail}",
+                          f"Filled {n} question(s) across {pages} screen(s). Review the form, then "
+                          "submit it yourself.", color=T.ACCENT)
+            self._section("What was filled", report, color=T.TEXT_MUTED)
+        self._apply_state(self.controller.state)
+
+    def _floating_capture(self) -> None:
+        """Hide every assistant window, grab a clean screenshot, then restore + analyze."""
+        if not self._gemini_ok:
+            self.logger.warn("Gemini is not configured — opening the panel so you can see why.")
+            self._show_as_sidebar()
+            return
+        if self.controller.busy or self.controller.state == AgentState.PROCESSING:
+            self.logger.warn("A request is already in progress — please wait.")
+            return
+        if self.controller.monitoring and self.controller.state != AgentState.PAUSED:
+            self.logger.warn("Stop the running agent before a one-off capture.")
+            return
+        self._sync_context()
+        self._capturing_clean = True
+        self.floating.hide()
+        self._hide_sidebar()
+        self.screens.set_own_window(None)
+        self.update_idletasks()
+        self.after(HIDE_DELAY_MS, self._do_clean_capture)
+
+    def _do_clean_capture(self) -> None:
+        self.logger.info("Capturing the screen with the assistant hidden…")
+        if not self.controller.capture_once():
+            # Could not start (e.g. busy); bring the button back so the user isn't stuck.
+            self._capturing_clean = False
+            self.floating.show()
+
     # ================================================================== shutdown
     def _on_close(self) -> None:
+        if not messagebox.askokcancel("Quit One Click",
+                                       "Quit One Click completely? 😔",
+                                       parent=self.floating):
+            return
         self._closing = True
         self.automation.cancel.set()
         self.controller.shutdown()
+        try:
+            self.floating.destroy()
+        except Exception:
+            pass
         self.destroy()
+
+
+class CookChooser(ctk.CTkToplevel):
+    """Pops when Cook is pressed: 'what are you doing?' → quiz / form / feedback (+ tone)."""
+
+    CHOICES = [("practice", "✔  Quiz practice", "Read a question, get the answer + why"),
+               ("form", "✎  Form fill", "Map your saved details onto a form"),
+               ("feedback", "★  Feedback form", "Auto-fill & scroll a survey to a vibe")]
+
+    def __init__(self, master, tone_label: str, on_choose):
+        super().__init__(master, fg_color=T.BG)
+        self._on_choose = on_choose
+        self.title("What are you cooking?")
+        self.transient(master)
+        self.resizable(False, False)
+        self.attributes("-topmost", True)
+        ctk.CTkLabel(self, text="what are we cooking? 🍳", font=T.font(17, "bold"),
+                     text_color=T.TEXT).grid(row=0, column=0, padx=20, pady=(18, 2), sticky="w")
+        ctk.CTkLabel(self, text="pick the task, then let it cook", font=T.font(11),
+                     text_color=T.TEXT_MUTED).grid(row=1, column=0, padx=20, pady=(0, 10), sticky="w")
+        for i, (key, label, desc) in enumerate(self.CHOICES, start=2):
+            btn = ctk.CTkButton(self, text=f"{label}\n{desc}", anchor="w",
+                                command=lambda k=key: self._pick(k),
+                                **T.secondary_button(height=52, font=T.font(13, "bold")))
+            btn.grid(row=i, column=0, padx=20, pady=4, sticky="ew")
+        # Tone row (used only for feedback)
+        tone_row = ctk.CTkFrame(self, fg_color="transparent")
+        tone_row.grid(row=5, column=0, padx=20, pady=(8, 4), sticky="ew")
+        ctk.CTkLabel(tone_row, text="Feedback tone:", font=T.font(12),
+                     text_color=T.TEXT_MUTED).pack(side="left", padx=(0, 8))
+        self.tone_var = tk.StringVar(value=tone_label)
+        ctk.CTkOptionMenu(tone_row, values=[lbl for lbl, _k in FEEDBACK_TONES],
+                          variable=self.tone_var, width=140, fg_color=T.SURFACE,
+                          button_color=T.BORDER, button_hover_color=T.SURFACE_HOVER,
+                          text_color=T.TEXT, font=T.font(12)).pack(side="left")
+        ctk.CTkButton(self, text="✕ nvm", command=self.destroy,
+                      **T.secondary_button(height=28, text_color=T.TEXT_MUTED)
+                      ).grid(row=6, column=0, padx=20, pady=(6, 16), sticky="e")
+        self.grid_columnconfigure(0, weight=1)
+        self.after(120, self.focus_force)
+
+    def _pick(self, key: str) -> None:
+        tone = self.tone_var.get()
+        self.destroy()
+        self._on_choose(key, tone)
+
+
+class FloatingBar(tk.Toplevel):
+    """Small, movable, always-on-top capture control that lives on the desktop.
+
+    It is the primary entry point while the main window stays hidden: click Capture to grab a
+    clean screenshot (the app hides itself first), ▦ to open the panel, ✕ to quit.
+    """
+
+    def __init__(self, master, on_capture, on_panel, on_quit):
+        super().__init__(master)
+        self._on_capture = on_capture
+        self.overrideredirect(True)                 # borderless, no title bar
+        self.attributes("-topmost", True)
+        try:
+            self.attributes("-alpha", 0.97)
+        except tk.TclError:
+            pass
+        self.configure(bg=T.ACCENT)
+        sw = self.winfo_screenwidth()
+        self.geometry(f"+{max(sw - 250, 0)}+140")
+
+        frame = ctk.CTkFrame(self, fg_color=T.CARD, corner_radius=T.RADIUS,
+                             border_width=1, border_color=T.BORDER)
+        frame.pack(padx=2, pady=2)
+        handle = ctk.CTkLabel(frame, text="⠿  One Click", text_color=T.TEXT_DIM,
+                              font=T.font(11, "bold"), cursor="fleur")
+        handle.grid(row=0, column=0, padx=(10, 6), pady=8)
+        self.capture_btn = ctk.CTkButton(frame, text="🍳 Cook", width=104,
+                                         command=self._capture, **T.primary_button(height=32))
+        self.capture_btn.grid(row=0, column=1, padx=2, pady=8)
+        self.panel_btn = ctk.CTkButton(frame, text="▦", width=34, command=on_panel,
+                                       **T.secondary_button(height=32))
+        self.panel_btn.grid(row=0, column=2, padx=2, pady=8)
+        self.quit_btn = ctk.CTkButton(frame, text="✕", width=30, command=on_quit,
+                                      **T.danger_button(height=32))
+        self.quit_btn.grid(row=0, column=3, padx=(2, 10), pady=8)
+
+        self._ox = self._oy = 0
+        for widget in (self, frame, handle):          # drag by the body/handle, not the buttons
+            widget.bind("<ButtonPress-1>", self._press)
+            widget.bind("<B1-Motion>", self._drag)
+
+    def _press(self, event) -> None:
+        self._ox = event.x_root - self.winfo_rootx()
+        self._oy = event.y_root - self.winfo_rooty()
+
+    def _drag(self, event) -> None:
+        self.geometry(f"+{event.x_root - self._ox}+{event.y_root - self._oy}")
+
+    def _capture(self) -> None:
+        self._on_capture()
+
+    def set_busy(self, busy: bool) -> None:
+        try:
+            if busy:
+                self.capture_btn.configure(text="🍳 cookin…", state="disabled")
+            else:
+                self.capture_btn.configure(text="🍳 Cook", state="normal")
+        except tk.TclError:
+            pass
+
+    def show(self) -> None:
+        try:
+            self.deiconify()
+            self.lift()
+            self.attributes("-topmost", True)
+        except tk.TclError:
+            pass
+
+    def hide(self) -> None:
+        try:
+            self.withdraw()
+        except tk.TclError:
+            pass
 
 
 class RegionSelector(tk.Toplevel):
@@ -1046,7 +1566,7 @@ class SettingsDialog(ctk.CTkToplevel):
 
     def __init__(self, master, settings: AgentSettings, on_save, model: str, mock: bool):
         super().__init__(master, fg_color=T.BG)
-        self.title("Settings — CHEATER.exe")
+        self.title("Settings — One Click")
         self.transient(master)
         self.resizable(False, False)
         self._on_save = on_save

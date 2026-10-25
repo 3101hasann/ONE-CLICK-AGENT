@@ -8,7 +8,8 @@ from pydantic import BaseModel
 
 from app import feedback_mode, form_mode, practice_mode
 from app.gemini_service import AnalysisRequest
-from app.response_models import FeedbackResult, FormResult, PracticeResult, parse_model_output
+from app.response_models import (FeedbackFormResult, FormResult, PracticeResult,
+                                  parse_model_output)
 
 
 @dataclass(frozen=True)
@@ -16,6 +17,7 @@ class ModeContext:
     """User-supplied input for the active mode (snapshotted per task)."""
     input_text: str = ""
     study_only: bool = False
+    tone: str = "good"          # Feedback Form Filler: desired sentiment
 
 
 @dataclass(frozen=True)
@@ -65,14 +67,15 @@ MODES: dict[str, ModeSpec] = {
         copy_text=form_mode.copy_text,
     ),
     "feedback": ModeSpec(
-        key="feedback", title="Instant Feedback", icon="✉",
-        description="Grammar, clarity & a polished rewrite",
-        response_model=FeedbackResult,
-        input_label="Paste text instead of capturing (optional)",
-        input_placeholder="Paste your paragraph, e-mail or answer here, then click Analyze Text",
-        supports_text_input=True, pause_for_review=False,
-        _prompt=lambda c: feedback_mode.build_prompt(c.input_text),
-        _post=lambda r: r,
+        key="feedback", title="Feedback Form Filler", icon="★",
+        description="Fills a rating/feedback form to match a tone you pick",
+        response_model=FeedbackFormResult,
+        input_label="Desired tone",
+        input_placeholder="Pick how positive or negative the feedback should be, then capture "
+                          "the feedback form.",
+        supports_text_input=False, pause_for_review=True,
+        _prompt=lambda c: feedback_mode.build_prompt(c.tone),
+        _post=feedback_mode.reconcile,
         copy_text=feedback_mode.copy_text,
     ),
 }

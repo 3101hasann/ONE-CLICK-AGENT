@@ -128,10 +128,13 @@ def validate_image(image: Image.Image) -> None:
 
 
 def prepare_for_upload(image: Image.Image, max_side: int) -> bytes:
-    """Downscale only when very large (keeps text legible) and encode as PNG bytes."""
+    """Downscale beyond max_side, then JPEG-encode: far smaller + faster than PNG, and the
+    model reads text fine at quality 90. Smaller images also mean fewer vision tokens → faster."""
     if max(image.size) > max_side:
         image = image.copy()
         image.thumbnail((max_side, max_side), Image.LANCZOS)
+    if image.mode != "RGB":
+        image = image.convert("RGB")
     buffer = io.BytesIO()
-    image.save(buffer, format="PNG", optimize=True)
+    image.save(buffer, format="JPEG", quality=90, optimize=True, progressive=True)
     return buffer.getvalue()

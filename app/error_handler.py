@@ -62,6 +62,17 @@ def _retry_after(text: str) -> float | None:
     return None
 
 
+_API_MESSAGE = re.compile(r"['\"]message['\"]\s*:\s*['\"](.+?)['\"]", re.S)
+
+
+def _api_message(text: str) -> str | None:
+    """Pull the human-readable 'message' out of a Google API error payload, if present."""
+    match = _API_MESSAGE.search(text)
+    if match:
+        return match.group(1).strip()[:200]
+    return None
+
+
 def _status_code(exc: BaseException) -> int | None:
     for attr in ("code", "status_code"):
         value = getattr(exc, attr, None)
@@ -104,18 +115,23 @@ def classify_exception(exc: BaseException) -> AgentError:
     if code == 404 or ("not found" in lowered and "model" in lowered):
         return AgentError(ErrorCategory.CONFIG, "The configured Gemini model was not found.",
                           "Set GEMINI_MODEL in .env to a model that supports images "
-                          "(e.g. gemini-3.8-flash).")
+                          "(e.g. gemini-3.5-flash-lite).")
     if code == 504 or "deadline_exceeded" in lowered:
         return AgentError(ErrorCategory.TIMEOUT, "Gemini did not answer before the deadline (504).",
-                          "Gemini may be overloaded — retry, capture a smaller region, or set "
-                          "GEMINI_THINKING_LEVEL=minimal.", retryable=True)
+                          "Gemini may be overloaded or the screenshot is large — retry, capture a "
+                          "smaller region, or raise the request timeout in ⚙ Settings.",
+                          retryable=True)
     if code is not None and 500 <= code < 600:
         return AgentError(ErrorCategory.SERVER, f"Gemini returned a server error ({code}).",
                           "This is usually temporary — try again shortly.", retryable=True)
     if code == 400:
-        return AgentError(ErrorCategory.UNSUPPORTED_CONTENT,
-                          "Gemini could not process this request.",
-                          "Try a smaller or clearer capture region.")
+        detail = _api_message(text)
+        message = "Gemini rejected the request (400)."
+        if detail:
+            message = f"Gemini rejected the request (400): {detail}"
+        return AgentError(ErrorCategory.UNSUPPORTED_CONTENT, message,
+                          "Often a model setting (e.g. GEMINI_THINKING_LEVEL) or the capture — "
+                          "check the message above, or try a smaller/clearer region.")
     if "timeout" in names or "timed out" in lowered or "deadline" in lowered:
         return AgentError(ErrorCategory.TIMEOUT, "The Gemini request timed out.",
                           "Check your connection and try again.", retryable=True)

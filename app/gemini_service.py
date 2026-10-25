@@ -146,7 +146,8 @@ class GeminiService:
         client = self._get_client()
         parts = []
         if request.image_png is not None:
-            parts.append(types.Part.from_bytes(data=request.image_png, mime_type="image/png"))
+            mime = "image/jpeg" if request.image_png[:3] == b"\xff\xd8\xff" else "image/png"
+            parts.append(types.Part.from_bytes(data=request.image_png, mime_type=mime))
         parts.append(types.Part.from_text(text=request.user_prompt))
         config = types.GenerateContentConfig(
             system_instruction=f"{SHARED_RULES}\n\n{request.system_instruction}",
@@ -198,18 +199,22 @@ _MOCK_RESPONSES = {
         "notes": "This is a canned MOCK response — no screenshot was analyzed.",
     },
     "feedback": {
-        "text_found": True,
-        "original_text": "[MOCK] their going to the libary tomorow, it will be fun i think.",
-        "overall_feedback": "Clear intent, but several spelling errors and a run-on sentence.",
-        "strengths": ["Short and direct"],
-        "improvements": [
-            {"category": "spelling", "issue": "'their', 'libary', 'tomorow'",
-             "suggestion": "Use 'They're', 'library', 'tomorrow'."},
-            {"category": "structure", "issue": "Comma splice", "suggestion": "Split into two sentences."},
+        "form_found": True,
+        "form_title": "[MOCK] Course Feedback Survey",
+        "tone": "good",
+        "questions": [
+            {"question": "How was the instructor?", "q_type": "single_choice",
+             "options": ["Excellent", "Good", "Average", "Poor"], "chosen_index": 1,
+             "chosen_option": "Good", "comment": "", "click_x": 120, "click_y": 250,
+             "orientation": "horizontal", "required": True},
+            {"question": "Rate the course materials (1-5)", "q_type": "rating_scale",
+             "options": ["1", "2", "3", "4", "5"], "chosen_index": 3, "chosen_option": "4",
+             "click_x": 110, "click_y": 450, "orientation": "horizontal"},
+            {"question": "Additional comments", "q_type": "text", "options": [],
+             "chosen_index": -1, "comment": "[MOCK] Clear and genuinely useful overall.",
+             "click_x": 500, "click_y": 650},
         ],
-        "corrected_version": "They're going to the library tomorrow. I think it will be fun.",
-        "revision_notes": ["Fixed three spelling errors", "Split a comma splice"],
-        "uncertainty_notes": "This is a canned MOCK response.",
+        "notes": "This is a canned MOCK response — no screenshot was analyzed.",
     },
 }
 
